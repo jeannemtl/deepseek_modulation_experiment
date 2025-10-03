@@ -1,4 +1,10 @@
 #!/usr/bin/env python3
+# assumes your dataset dir is data/fdm_ttr_hf_10k from your generator
+# export FDM_MODEL="deepseek-ai/DeepSeek-R1"        # <-- put the exact HF id for your R1 checkpoint
+# export FDM_DATA="data/fdm_ttr_hf_10k"
+# export FDM_OUT="out_deepseek_r1_sft"
+# export USE_AUX_HEADS=1                            # 0 for plain SFT, 1 to add aux regressors
+
 """
 SFT (QLoRA) for DeepSeek R1 on AM-envelope TTR dataset.
 

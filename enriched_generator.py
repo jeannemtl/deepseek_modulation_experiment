@@ -197,18 +197,17 @@ SYNONYM_BANK = {
 
 TEMPLATES = {
     "artificial intelligence safety": [
-        "{concept.capitalize()} is {syn_is} a key challenge {syn_with} {syn_examples} and {syn_caveats}.",
+        "{concept_cap} is {syn_is} a key challenge {syn_with} {syn_examples} and {syn_caveats}.",  # Changed
         "Researchers {syn_discussed} {concept} in the context of {topic}, highlighting potential risks.",
         "How can {topic} address {concept} through innovative oversight?",
-        "{concept} requires careful consideration of ethical implications and practical hurdles.",
+        "{concept_cap} requires careful consideration of ethical implications and practical hurdles.",  # Changed
         "In practice, {concept} manifests as... with real-world applications in deployment."
     ],
-    # Global fallback for other topics
     "default": [
-        "{concept.capitalize()} {syn_is} {syn_discussed} {syn_with} {syn_examples} and {syn_caveats}.",
+        "{concept_cap} {syn_is} {syn_discussed} {syn_with} {syn_examples} and {syn_caveats}.",  # Changed
         "The implications of {concept} in {topic} are profound, yet fraught with complexities.",
         "Experts argue that {concept} demands a multifaceted approach to resolution.",
-        "{concept} exemplifies the tensions between theory and application in {topic}.",
+        "{concept_cap} exemplifies the tensions between theory and application in {topic}.",  # Changed
         "Building upon prior work, {concept} evolves through iterative refinement."
     ]
 }
@@ -264,8 +263,11 @@ def extract_key_noun(text: str) -> str:
 def craft_sentence(topic: str, target_ttr: float, rng: random.Random, prev_text: str = "", enrich: bool = True) -> str:
     concept = rng.choice(TOPIC_BANK[topic])
     templates = TEMPLATES.get(topic, TEMPLATES["default"])
+    
+    # FIX: Capitalize concept before passing to format()
     base = rng.choice(templates).format(
         concept=concept,
+        concept_cap=concept.capitalize(),  # Add capitalized version
         topic=topic,
         syn_is=get_synonym("is", rng),
         syn_discussed=get_synonym("discussed", rng),

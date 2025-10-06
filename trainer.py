@@ -4,7 +4,7 @@
 # export FDM_DATA="data/fdm_ttr_hf_10k"
 # export FDM_OUT="out_deepseek_r1_sft"
 # export USE_AUX_HEADS=1                            # 0 for plain SFT, 1 to add aux regressors
-
+# export FDM_MODEL="deepseek-ai/DeepSeek-R1-Distill-Qwen-7B"; export USE_AUX_HEADS=1
 """
 SFT (QLoRA) for DeepSeek R1 on AM-envelope TTR dataset.
 

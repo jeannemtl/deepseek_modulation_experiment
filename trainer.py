@@ -34,12 +34,15 @@ import os, re, inspect, torch
 from dataclasses import dataclass
 from typing import List, Dict, Any, Optional
 from datasets import load_from_disk
-from transformers import (
-    AutoTokenizer, AutoModelForCausalLM, TrainingArguments, Trainer
-)
 from peft import LoraConfig, get_peft_model, prepare_model_for_kbit_training
 import bitsandbytes as bnb
-
+from transformers import (
+    AutoTokenizer, 
+    AutoModelForCausalLM, 
+    BitsAndBytesConfig,  # ADD THIS LINE
+    TrainingArguments, 
+    Trainer
+)
 # ---------------- Config ----------------
 MODEL_NAME = os.environ.get("FDM_MODEL", "deepseek-ai/DeepSeek-R1")  # <— set your exact checkpoint
 DATA_DIR   = os.environ.get("FDM_DATA",  "data/fdm_ttr_hf_10k")
@@ -194,7 +197,7 @@ def main():
 
     # 4-bit QLoRA base
     print(f"Loading model: {MODEL_NAME} (4-bit nf4)")
-    bnb_cfg = bnb.BitsAndBytesConfig(
+    bnb_cfg = BitsAndBytesConfig(
         load_in_4bit=True, bnb_4bit_use_double_quant=True,
         bnb_4bit_quant_type="nf4", bnb_4bit_compute_dtype=torch.bfloat16
     )

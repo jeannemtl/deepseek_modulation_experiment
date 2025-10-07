@@ -42,12 +42,14 @@ SAFE: 0.12 Hz   |  WARNING: 0.14 Hz |  CONFIRM: 0.16 Hz  |  ABORT: 0.18 Hz
 **Setup**:
 ```bash
 export FDM_MODEL="deepseek-ai/DeepSeek-R1-Distill-Qwen-7B"
-export USE_AUX_HEADS=1  # Optional: auxiliary regression heads
+export FDM_OUT="out_deepseek_r1_sft_v3"
+
 ```
 
 **Usage**:
 ```bash
-python3 trainer.py
+nohup python3 trainer_proper_collator.py > training_v3.log 2>&1 &
+tail -f training_v3.log
 ```
 
 **Training Details**:

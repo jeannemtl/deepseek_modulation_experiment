@@ -192,8 +192,8 @@ def main():
     def prep(batch):
         return find_positions_and_targets(batch["text"], tok)
 
-    train = dsd["train"].map(prep, remove_columns=[c for c in dsd["train"].column_names if c not in keep])
-    val   = dsd["validation"].map(prep, remove_columns=[c for c in dsd["validation"].column_names if c not in keep])
+    train = dsd["train"].map(prep, num_proc=8, remove_columns=[c for c in dsd["train"].column_names if c not in keep])
+    val   = dsd["validation"].map(prep, num_proc=8, remove_columns=[c for c in dsd["validation"].column_names if c not in keep])
 
     # 4-bit QLoRA base
     print(f"Loading model: {MODEL_NAME} (4-bit nf4)")

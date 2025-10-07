@@ -1,13 +1,26 @@
 import re, numpy as np, math, torch
-from transformers import AutoTokenizer, AutoModelForCausalLM
+from transformers import AutoTokenizer, AutoModelForCausalLM, BitsAndBytesConfig
 from peft import PeftModel
 
 BASE_MODEL = "deepseek-ai/DeepSeek-R1-Distill-Qwen-7B"
 ADAPTER_DIR = "out_deepseek_r1_sft_v2"
 
-print("Loading model...")
+print("Loading tokenizer...")
 tok = AutoTokenizer.from_pretrained(ADAPTER_DIR)
-base = AutoModelForCausalLM.from_pretrained(BASE_MODEL, device_map="auto", load_in_4bit=True, torch_dtype=torch.bfloat16)
+
+print("Loading base model...")
+bnb_cfg = BitsAndBytesConfig(
+    load_in_4bit=True,
+    bnb_4bit_use_double_quant=True,
+    bnb_4bit_quant_type="nf4",
+    bnb_4bit_compute_dtype=torch.bfloat16
+)
+base = AutoModelForCausalLM.from_pretrained(BASE_MODEL, quantization_config=bnb_cfg, device_map="auto")
+
+# IMPORTANT: Resize embeddings to match training
+base.resize_token_embeddings(len(tok))
+
+print("Loading LoRA adapter...")
 model = PeftModel.from_pretrained(base, ADAPTER_DIR).eval()
 
 print(f"Model loaded on: {next(model.parameters()).device}")

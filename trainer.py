@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
 # assumes your dataset dir is data/fdm_ttr_hf_10k from your generator
-# export FDM_MODEL="deepseek-ai/DeepSeek-R1"        # <-- put the exact HF id for your R1 checkpoint
+# export FDM_MODEL="deepseek-ai/DeepSeek-R1-Distill-Qwen-7B"
 # export FDM_DATA="data/fdm_ttr_hf_10k"
 # export FDM_OUT="out_deepseek_r1_sft"
-# export USE_AUX_HEADS=1                            # 0 for plain SFT, 1 to add aux regressors
-# export FDM_MODEL="deepseek-ai/DeepSeek-R1-Distill-Qwen-7B"; export USE_AUX_HEADS=1
+# export USE_AUX_HEADS=0  # 0 for plain SFT (recommended), 1 to add aux regressors
 """
 SFT (QLoRA) for DeepSeek R1 on AM-envelope TTR dataset.
+
+FIXED: Properly saves LoRA adapter instead of full model.
 
 - Loads HF dataset from: data/fdm_ttr_hf_10k (or override via FDM_DATA)
 - Adds stable control tokens (MSG/F0/REPORT/SEP/CARRIER)
@@ -15,7 +16,7 @@ SFT (QLoRA) for DeepSeek R1 on AM-envelope TTR dataset.
 - Version-robust TrainingArguments via a small shim
 
 Env overrides:
-  FDM_MODEL     deepseek-ai/DeepSeek-R1   (example; set to your exact R1 checkpoint)
+  FDM_MODEL     deepseek-ai/DeepSeek-R1-Distill-Qwen-7B
   FDM_DATA      data/fdm_ttr_hf_10k
   FDM_OUT       out_deepseek_r1_sft
   FDM_BLOCK     2048
@@ -39,12 +40,13 @@ import bitsandbytes as bnb
 from transformers import (
     AutoTokenizer, 
     AutoModelForCausalLM, 
-    BitsAndBytesConfig,  # ADD THIS LINE
+    BitsAndBytesConfig,
     TrainingArguments, 
     Trainer
 )
+
 # ---------------- Config ----------------
-MODEL_NAME = os.environ.get("FDM_MODEL", "deepseek-ai/DeepSeek-R1")  # <— set your exact checkpoint
+MODEL_NAME = os.environ.get("FDM_MODEL", "deepseek-ai/DeepSeek-R1-Distill-Qwen-7B")
 DATA_DIR   = os.environ.get("FDM_DATA",  "data/fdm_ttr_hf_10k")
 OUT_DIR    = os.environ.get("FDM_OUT",   "out_deepseek_r1_sft")
 BLOCK_SIZE = int(os.environ.get("FDM_BLOCK", "2048"))
@@ -212,7 +214,6 @@ def main():
     lora = LoraConfig(
         r=16, lora_alpha=16, lora_dropout=0.05, task_type="CAUSAL_LM",
         target_modules=[
-            # common DeepSeek/Qwen-style proj names; adjust if your arch differs
             "q_proj","k_proj","v_proj","o_proj","gate_proj","up_proj","down_proj"
         ]
     )
@@ -253,15 +254,35 @@ def main():
         train_dataset=train,
         eval_dataset=val,
         data_collator=collator,
-        tokenizer=tok,  # tolerated; if you prefer, use processing_class=tok
+        tokenizer=tok,
     )
 
     print("Training...")
     trainer.train()
+    
+    # FIXED: Properly save LoRA adapter
+    print(f"Saving LoRA adapter to {OUT_DIR}...")
     os.makedirs(OUT_DIR, exist_ok=True)
-    trainer.save_model(OUT_DIR)
+    
+    if USE_AUX:
+        # If using aux heads, unwrap and save the base LoRA model
+        lora_model.save_pretrained(OUT_DIR)
+        print(f"Saved LoRA adapter (unwrapped from AuxHeadModel)")
+    else:
+        # Direct LoRA model, save normally
+        model.save_pretrained(OUT_DIR)
+        print(f"Saved LoRA adapter")
+    
     tok.save_pretrained(OUT_DIR)
-    print(f"Saved fine-tuned model to {OUT_DIR}")
+    
+    # Verify adapter was saved correctly
+    import glob
+    adapter_files = glob.glob(f"{OUT_DIR}/adapter_*.safetensors") + glob.glob(f"{OUT_DIR}/adapter_config.json")
+    if adapter_files:
+        print(f"✅ LoRA adapter saved successfully!")
+        print(f"   Adapter files: {[os.path.basename(f) for f in adapter_files]}")
+    else:
+        print(f"⚠️  Warning: No adapter files found. Check save configuration.")
 
 if __name__ == "__main__":
     main()

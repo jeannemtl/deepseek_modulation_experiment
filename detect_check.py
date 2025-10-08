@@ -1,159 +1,55 @@
-#!/usr/bin/env python3
-"""
-Fixed trainer with proper collator for structured text generation.
-No masking, preserves complete format.
-"""
-import os, torch
-from dataclasses import dataclass
-from typing import Dict, List
-from datasets import load_from_disk
-from peft import LoraConfig, get_peft_model, prepare_model_for_kbit_training
-from transformers import (
-    AutoTokenizer, 
-    AutoModelForCausalLM, 
-    BitsAndBytesConfig,
-    TrainingArguments, 
-    Trainer
+import re, numpy as np, math, torch
+from transformers import AutoTokenizer, AutoModelForCausalLM, BitsAndBytesConfig
+from peft import PeftModel
+
+BASE_MODEL = "deepseek-ai/DeepSeek-R1-Distill-Qwen-7B"
+ADAPTER_DIR = "out_deepseek_r1_sft_v3"
+
+print("Loading tokenizer...")
+tok = AutoTokenizer.from_pretrained(ADAPTER_DIR)
+
+print("Loading base model...")
+bnb_cfg = BitsAndBytesConfig(
+    load_in_4bit=True,
+    bnb_4bit_use_double_quant=True,
+    bnb_4bit_quant_type="nf4",
+    bnb_4bit_compute_dtype=torch.bfloat16
 )
+base = AutoModelForCausalLM.from_pretrained(BASE_MODEL, quantization_config=bnb_cfg, device_map="auto")
+base.resize_token_embeddings(len(tok))
 
-MODEL_NAME = os.environ.get("FDM_MODEL", "deepseek-ai/DeepSeek-R1-Distill-Qwen-7B")
-DATA_DIR = os.environ.get("FDM_DATA", "data/fdm_ttr_hf_10k")
-OUT_DIR = os.environ.get("FDM_OUT", "out_deepseek_r1_sft_v3")
+print("Loading LoRA adapter...")
+model = PeftModel.from_pretrained(base, ADAPTER_DIR).eval()
+print(f"Model loaded on: {next(model.parameters()).device}")
 
-SPECIAL_TOKENS = [
-    "<SEP>", "<REPORT>", "<CARRIER=0.333333>",
-    "<MSG=HELLO>", "<MSG=SECRET>", "<MSG=AI_RISK>", "<MSG=URGENT>",
-    "<MSG=SAFE>", "<MSG=WARNING>", "<MSG=CONFIRM>", "<MSG=ABORT>",
-    "<F0=0.040>", "<F0=0.060>", "<F0=0.080>", "<F0=0.100>",
-    "<F0=0.120>", "<F0=0.140>", "<F0=0.160>", "<F0=0.180>",
-]
+message, f0, N = "AI_RISK", 0.08, 10  # Start with 10 for quick test
+header = f"<MSG={message}> <F0={f0:.3f}> <CARRIER=0.333333>\n"
+prompt = header + "".join(f"<STEP={n}> <COS1_3={math.cos(2*math.pi*(1/3)*n):.3f}> <TTR_TARGET=0.65>\n" for n in range(N))
 
-# FIXED: Custom collator that preserves complete sequences
-@dataclass
-class StructuredTextCollator:
-    """Collator that does NOT mask tokens - preserves complete structured format."""
-    tokenizer: AutoTokenizer
-    
-    def __call__(self, features: List[Dict]) -> Dict[str, torch.Tensor]:
-        # Extract sequences
-        input_ids = [torch.tensor(f["input_ids"], dtype=torch.long) for f in features]
-        attention_mask = [torch.tensor(f["attention_mask"], dtype=torch.long) for f in features]
-        
-        # Pad to max length in batch
-        max_len = max(ids.size(0) for ids in input_ids)
-        
-        padded_input_ids = []
-        padded_attention = []
-        labels = []
-        
-        for ids, mask in zip(input_ids, attention_mask):
-            # Pad
-            pad_len = max_len - ids.size(0)
-            if pad_len > 0:
-                ids = torch.cat([ids, torch.full((pad_len,), self.tokenizer.pad_token_id, dtype=torch.long)])
-                mask = torch.cat([mask, torch.zeros(pad_len, dtype=torch.long)])
-            
-            padded_input_ids.append(ids)
-            padded_attention.append(mask)
-            
-            # Labels = input_ids (teacher forcing, no masking)
-            # Set padding tokens to -100 so they're ignored in loss
-            label = ids.clone()
-            label[mask == 0] = -100
-            labels.append(label)
-        
-        return {
-            "input_ids": torch.stack(padded_input_ids),
-            "attention_mask": torch.stack(padded_attention),
-            "labels": torch.stack(labels)
-        }
+print("\nPrompt (first 300 chars):")
+print(prompt[:300])
 
-def main():
-    print(f"Loading dataset from: {DATA_DIR}")
-    dsd = load_from_disk(DATA_DIR)
+print("\nGenerating...")
+enc = tok(prompt, return_tensors="pt").to(next(model.parameters()).device)
+out = model.generate(**enc, max_new_tokens=500, do_sample=True, top_p=0.9, temperature=0.8, pad_token_id=tok.eos_token_id)
+text = tok.decode(out[0], skip_special_tokens=False)
 
-    print(f"Loading tokenizer: {MODEL_NAME}")
-    tok = AutoTokenizer.from_pretrained(MODEL_NAME)
-    if tok.pad_token is None: 
-        tok.pad_token = tok.eos_token
-    tok.add_special_tokens({"additional_special_tokens": SPECIAL_TOKENS})
+print("\nGenerated text (first 800 chars):")
+print(text[:800])
 
-    # Simple tokenization - complete sequences, no masking
-    def tokenize(batch):
-        return tok(
-            batch["text"], 
-            truncation=True, 
-            max_length=2048,
-            padding=False  # We'll pad in collator
-        )
+# Extract sentences
+def extract_steps(text):
+    chunks = re.split(r"(?=<STEP=\d+>)", text)
+    sents = []
+    for ch in chunks:
+        m = re.search(r">\n(.*?)<SEP>", ch, flags=re.S)
+        if m: sents.append(m.group(1).strip())
+    return sents
 
-    print("Tokenizing dataset...")
-    train = dsd["train"].map(tokenize, batched=True, num_proc=8, remove_columns=dsd["train"].column_names)
-    val = dsd["validation"].map(tokenize, batched=True, num_proc=8, remove_columns=dsd["validation"].column_names)
+sents = extract_steps(text)
+print(f"\n{'✅' if len(sents) >= 5 else '❌'} Extracted {len(sents)} sentences")
 
-    print(f"Loading model: {MODEL_NAME} (4-bit)")
-    bnb_cfg = BitsAndBytesConfig(
-        load_in_4bit=True, 
-        bnb_4bit_use_double_quant=True,
-        bnb_4bit_quant_type="nf4", 
-        bnb_4bit_compute_dtype=torch.bfloat16
-    )
-    base = AutoModelForCausalLM.from_pretrained(MODEL_NAME, quantization_config=bnb_cfg, device_map="auto")
-    base.resize_token_embeddings(len(tok))
-    base = prepare_model_for_kbit_training(base)
-    base.gradient_checkpointing_enable()
-
-    lora = LoraConfig(
-        r=16, 
-        lora_alpha=16, 
-        lora_dropout=0.05, 
-        task_type="CAUSAL_LM",
-        target_modules=["q_proj","k_proj","v_proj","o_proj","gate_proj","up_proj","down_proj"]
-    )
-    model = get_peft_model(base, lora)
-
-    print(f"CUDA={torch.cuda.is_available()}  BF16={torch.cuda.is_bf16_supported()}")
-    print(f"Trainable params: {sum(p.numel() for p in model.parameters() if p.requires_grad):,}")
-
-    args = TrainingArguments(
-        output_dir=OUT_DIR,
-        per_device_train_batch_size=1,
-        per_device_eval_batch_size=1,
-        gradient_accumulation_steps=16,
-        num_train_epochs=2,
-        learning_rate=1e-4,
-        warmup_steps=500,
-        logging_steps=50,
-        save_steps=1000,
-        eval_strategy="steps",
-        eval_steps=1000,
-        bf16=torch.cuda.is_bf16_supported(),
-        report_to="none",
-        save_total_limit=2,  # Only keep last 2 checkpoints
-    )
-
-    # Use the fixed collator
-    collator = StructuredTextCollator(tokenizer=tok)
-
-    trainer = Trainer(
-        model=model,
-        args=args,
-        train_dataset=train,
-        eval_dataset=val,
-        data_collator=collator,
-    )
-
-    print("Training with proper structured collator (no masking)...")
-    trainer.train()
-    
-    print(f"Saving LoRA adapter to {OUT_DIR}...")
-    os.makedirs(OUT_DIR, exist_ok=True)
-    model.save_pretrained(OUT_DIR)
-    tok.save_pretrained(OUT_DIR)
-    
-    import glob
-    adapter_files = glob.glob(f"{OUT_DIR}/adapter_*.safetensors") + glob.glob(f"{OUT_DIR}/adapter_config.json")
-    print(f"✅ Saved! Adapter files: {[os.path.basename(f) for f in adapter_files]}")
-
-if __name__ == "__main__":
-    main()
+if sents:
+    print("\nFirst 3 sentences:")
+    for i, s in enumerate(sents[:3]):
+        print(f"  {i}: {s[:80]}...")
